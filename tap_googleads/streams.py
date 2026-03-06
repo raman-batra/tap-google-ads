@@ -445,22 +445,36 @@ class CampaignPerformanceByGenderAndDevice(ReportsStream):
 
 
 class CampaignPerformanceByLocation(ReportsStream):
-    """Campaign Performance By Age Range and Device"""
-
+    """Campaign Performance By Location"""
 
     def gaql(self, context=None):
         return f"""
-    SELECT campaign_criterion.location.geo_target_constant, campaign.name, campaign_criterion.bid_modifier, segments.date, metrics.clicks, metrics.impressions, metrics.ctr, metrics.average_cpc, metrics.cost_micros FROM location_view WHERE segments.date >= {self.start_date(context)} and segments.date <= {self.end_date} AND campaign_criterion.status != 'REMOVED'
+    SELECT
+        campaign.id,
+        campaign.name,
+        campaign_criterion.criterion_id,
+        campaign_criterion.location.geo_target_constant,
+        campaign_criterion.bid_modifier,
+        segments.date,
+        metrics.clicks,
+        metrics.impressions,
+        metrics.ctr,
+        metrics.average_cpc,
+        metrics.cost_micros
+    FROM location_view
+    WHERE segments.date >= {self.start_date(context)}
+      and segments.date <= {self.end_date}
+      AND campaign_criterion.status != 'REMOVED'
     """
 
     records_jsonpath = "$.results[*]"
     name = "stream_campaign_performance_by_location"
     primary_keys = [
-        "campaignCriterion__location__geoTargetConstant",
-        "campaign__name",
+        "campaign__id",
+        "campaignCriterion__criterionId",
         "segments__date",
     ]
-    
+
     schema_filepath = SCHEMAS_DIR / "campaign_performance_by_location.json"
 
 
