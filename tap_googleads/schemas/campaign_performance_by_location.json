@@ -1,6 +1,12 @@
 {
     "type": "object",
     "properties": {
+        "campaign__id": {
+            "type": ["string", "null"]
+        },
+        "campaignCriterion__criterionId": {
+            "type": ["string", "null"]
+        },
         "customer_id": {
             "type": ["string", "null"]
         },
