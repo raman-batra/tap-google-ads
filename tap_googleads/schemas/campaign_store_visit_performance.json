@@ -16,23 +16,8 @@
     "campaign__id": {
       "type": ["string", "null"]
     },
-    "metrics__clicks": {
-      "type": ["string", "null"]
-    },
-    "metrics__costMicros": {
-      "type": ["string", "null"]
-    },
-    "metrics__ctr": {
+    "metrics__allConversionsFromStoreVisit": {
       "type": ["number", "null"]
-    },
-    "metrics__averageCpc": {
-      "type": ["number", "null"]
-    },
-    "metrics__impressions": {
-      "type": ["string", "null"]
-    },
-    "segments__device": {
-      "type": ["string", "null"]
     },
     "segments__date": {
       "type": ["string", "null"]

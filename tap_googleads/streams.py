@@ -383,7 +383,7 @@ class AdGroupsPerformance(ReportsStream):
 
 
 class CampaignPerformance(ReportsStream):
-    """Campaign daily performance incl. store visits."""
+    """Campaign Performance"""
 
     def gaql(self, context=None):
         return f"""
@@ -398,8 +398,7 @@ class CampaignPerformance(ReportsStream):
             metrics.clicks,
             metrics.ctr,
             metrics.average_cpc,
-            metrics.cost_micros,
-            metrics.all_conversions_from_store_visit
+            metrics.cost_micros
         FROM campaign
         WHERE segments.date >= {self.start_date(context)}
           and segments.date <= {self.end_date}
@@ -413,7 +412,39 @@ class CampaignPerformance(ReportsStream):
         "segments__date",
         "segments__device",
     ]
+
     schema_filepath = SCHEMAS_DIR / "campaign_performance.json"
+
+class CampaignStoreVisitPerformance(ReportsStream):
+    """Campaign daily store visit performance.
+
+    Store visit metrics are not compatible with segments.device, so this
+    lives in a dedicated stream segmented only by date.
+    """
+
+    def gaql(self, context=None):
+        return f"""
+        SELECT
+            campaign.id,
+            campaign.name,
+            campaign.resource_name,
+            campaign.status,
+            segments.date,
+            metrics.all_conversions_from_store_visit
+        FROM campaign
+        WHERE segments.date >= {self.start_date(context)}
+          and segments.date <= {self.end_date}
+        """
+
+    records_jsonpath = "$.results[*]"
+    name = "stream_campaign_store_visit_performance"
+    primary_keys = [
+        "customer_id",
+        "campaign__id",
+        "segments__date",
+    ]
+
+    schema_filepath = SCHEMAS_DIR / "campaign_store_visit_performance.json"
 
 class CampaignConversionActionPerformance(ReportsStream):
     """Campaign daily performance segmented by conversion action."""
