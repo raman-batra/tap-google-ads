@@ -123,11 +123,16 @@ class GoogleAdsStream(RESTStream):
             headers["User-Agent"] = self.config.get("user_agent")
         headers["developer-token"] = self.config["developer_token"]
         if self.login_customer_id:
-            headers["login-customer-id"] = (
-                self.login_customer_id
-                # or self.context
-                # and self.context.get("customer_id")
-            )
+            headers["login-customer-id"] = self.login_customer_id
+
+        self.logger.info(
+            "Google Ads request headers prepared: has_developer_token=%s, has_login_customer_id=%s, login_customer_id=%s, has_user_agent=%s",
+            bool(self.config.get("developer_token")),
+            bool(self.login_customer_id),
+            f"{self.login_customer_id[:3]}***{self.login_customer_id[-4:]}" if self.login_customer_id else None,
+            "user_agent" in self.config,
+        )
+
         return headers
 
     def get_url_params(

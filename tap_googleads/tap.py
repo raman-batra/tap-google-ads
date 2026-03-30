@@ -1,7 +1,7 @@
 """GoogleAds tap class."""
 
 from datetime import datetime, timedelta, timezone
-from typing import List
+from typing import Any, Dict, List
 
 from singer_sdk import Stream, Tap
 from singer_sdk import typing as th  # JSON schema typing helpers
@@ -43,6 +43,48 @@ STREAM_TYPES = [
 ]
 
 CUSTOMER_ID_TYPE = th.StringType()
+
+
+def _mask_value(value: Any) -> Any:
+    if value is None:
+        return None
+
+    value = str(value).strip()
+    if not value:
+        return "<empty>"
+
+    if len(value) <= 4:
+        return "***"
+
+    return f"{value[:3]}***{value[-4:]}"
+
+
+def _safe_config_snapshot(config: Dict[str, Any]) -> Dict[str, Any]:
+    locations = config.get("locations") or []
+
+    return {
+        "config_keys": sorted(list(config.keys())),
+        "has_client_id": bool(config.get("client_id")),
+        "has_client_secret": bool(config.get("client_secret")),
+        "has_refresh_proxy_url": bool(config.get("refresh_proxy_url")),
+        "has_refresh_proxy_url_auth": bool(config.get("refresh_proxy_url_auth")),
+        "has_refresh_token": bool(config.get("refresh_token")),
+        "has_developer_token": bool(config.get("developer_token")),
+        "developer_token_masked": _mask_value(config.get("developer_token")),
+        "has_login_customer_id": bool(config.get("login_customer_id")),
+        "login_customer_id_masked": _mask_value(config.get("login_customer_id")),
+        "locations_count": len(locations) if isinstance(locations, list) else 0,
+        "location_ids_masked": [
+            _mask_value(loc.get("id"))
+            for loc in locations
+            if isinstance(loc, dict) and loc.get("id")
+        ],
+        "start_date": config.get("start_date"),
+        "end_date": config.get("end_date"),
+        "enable_click_view_report_stream": config.get(
+            "enable_click_view_report_stream", False
+        ),
+    }
 
 
 class TapGoogleAds(Tap):
@@ -126,7 +168,6 @@ class TapGoogleAds(Tap):
 
         return super().setup_mapper()
 
-        
     def discover_streams(self) -> List[Stream]:
         """Return a list of discovered streams."""
         if self.config["enable_click_view_report_stream"]:
@@ -135,7 +176,7 @@ class TapGoogleAds(Tap):
 
     def _validate_config(self, *, raise_errors: bool = True) -> None:
         """Validate configuration.
-        
+
         Raises:
             ConfigValidationError: If the configuration is invalid.
         """
@@ -150,10 +191,15 @@ class TapGoogleAds(Tap):
         has_standard_oauth = bool(client_id) and bool(client_secret)
         has_proxy_oauth = bool(refresh_proxy_url) and bool(refresh_proxy_url_auth)
 
+        self.logger.info(
+            "Tap config snapshot: %s",
+            _safe_config_snapshot(dict(self.config)),
+        )
+
         if not (has_standard_oauth or has_proxy_oauth):
             raise ConfigValidationError(
                 "Authentication configuration is invalid. Must provide either:\n"
-                "1. Both 'client_id' and 'client_secret' for standard OAuth, or\n" 
+                "1. Both 'client_id' and 'client_secret' for standard OAuth, or\n"
                 "2. Both 'refresh_proxy_url' and 'refresh_proxy_url_auth' for proxy OAuth"
             )
 
@@ -162,6 +208,12 @@ class TapGoogleAds(Tap):
                 "Both standard OAuth and proxy OAuth credentials provided. "
                 "Standard OAuth credentials will take precedence."
             )
+
+        if not self.config.get("locations") and not self.config.get("login_customer_id"):
+            self.logger.warning(
+                "Federated mode detected without explicit locations and without login_customer_id."
+            )
+
 
 if __name__ == "__main__":
     TapGoogleAds.cli()
