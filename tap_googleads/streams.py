@@ -111,14 +111,19 @@ class CustomerHierarchyStream(GoogleAdsStream):
 
 
     def get_records(self, context):
+        configured_customer_ids = set(self.customer_ids or [])
+
         for customer_id in context.get("customer_ids", []):
             try:
-                context["customer_id"] = customer_id
-                yield from super().get_records(context)
+                child_context = dict(context)
+                child_context["customer_id"] = customer_id
+                yield from super().get_records(child_context)
             except Exception as e:
-                if customer_id in self.customer_ids:
-                    raise e
-                self.logger.error(f"Error processing resource name {customer_id}: {str(e)}")
+                if customer_id in configured_customer_ids:
+                    raise
+                self.logger.error(
+                    f"Error processing resource name {customer_id}: {str(e)}"
+                )
                 continue
 
     def post_process(self, row, context):
