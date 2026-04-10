@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import datetime
 from http import HTTPStatus
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable
 
@@ -188,8 +189,17 @@ class ReportsStream(GoogleAdsStream):
         if "query" in params and self.supports_campaign_filter and self.campaign_ids:
             campaign_ids_str = ", ".join(self.campaign_ids)
             query = params["query"]
-            if "WHERE" in query.upper():
+            if re.search(r'\bWHERE\b', query, re.IGNORECASE):
                 params["query"] = query.rstrip() + f" AND campaign.id IN ({campaign_ids_str})"
+            elif re.search(r'\bORDER\s+BY\b', query, re.IGNORECASE):
+                # WHERE must precede ORDER BY in GAQL — insert before it
+                params["query"] = re.sub(
+                    r'(\bORDER\s+BY\b)',
+                    f'WHERE campaign.id IN ({campaign_ids_str}) \\1',
+                    query,
+                    count=1,
+                    flags=re.IGNORECASE,
+                )
             else:
                 params["query"] = query.rstrip() + f" WHERE campaign.id IN ({campaign_ids_str})"
             self.logger.debug(
@@ -633,6 +643,7 @@ class CampaignPerformanceByLocation(ReportsStream):
 class GeoPerformance(ReportsStream):
     """Geo performance"""
 
+    supports_campaign_filter = False  # geographic_view requires campaign.id in SELECT to filter by it
 
     def gaql(self, context=None):
         return f"""
