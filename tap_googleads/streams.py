@@ -46,15 +46,21 @@ class AccessibleCustomers(GoogleAdsStream):
             A child context for each child stream.
 
         """
-        customer_ids = []
+        accessible_ids = []
         for customer in record.get("resourceNames", []):
             customer_id = customer.split("/")[1]
-            customer_ids.append(customer_id.replace("-", ""))
+            accessible_ids.append(customer_id.replace("-", ""))
 
         # Always try to spawn child streams for customer ids in config
         # If those configured ids are invalid, the child streams will fail
+        customer_ids = list(accessible_ids)
         if self.customer_ids:
-            customer_ids = list(set(customer_ids).union(self.customer_ids))
+            customer_ids = list(set(accessible_ids).union(self.customer_ids))
+
+        self.logger.info(
+            "Customer IDs — accessible_from_api=%s, configured_customer_ids=%s, configured_campaign_ids=%s, final_hierarchy_set=%s",
+            accessible_ids, self.customer_ids or [], self.campaign_ids or [], customer_ids,
+        )
 
         return {"customer_ids": customer_ids}
 
@@ -148,16 +154,49 @@ class CustomerHierarchyStream(GoogleAdsStream):
 
         family_line = self.get_customer_family_line(record.get("resourceName"))
 
-        if is_active_client and not already_synced:
-            if not self.customer_ids or len(set(self.customer_ids).intersection(set(family_line))) > 0:
-                return {"customer_id": record.get("id"), "is_active_client": is_active_client}
-        
-        return None
+        if not is_active_client:
+            self.logger.debug(
+                "Skipping customer %s: not an active client (manager=%s, status=%s)",
+                customer_id, record.get("manager"), record.get("status"),
+            )
+            return None
+
+        if already_synced:
+            self.logger.debug("Skipping customer %s: already synced in this run", customer_id)
+            return None
+
+        if self.customer_ids and len(set(self.customer_ids).intersection(set(family_line))) == 0:
+            self.logger.debug(
+                "Skipping customer %s: family_line=%s has no overlap with configured customer_ids=%s",
+                customer_id, family_line, self.customer_ids,
+            )
+            return None
+
+        self.logger.info(
+            "Spawning child streams for customer_id=%s (family_line=%s)",
+            customer_id, family_line,
+        )
+        return {"customer_id": record.get("id"), "is_active_client": is_active_client}
 
 class ReportsStream(GoogleAdsStream):
     parent_stream_type = CustomerHierarchyStream
     replication_key = "segments__date"
+    supports_campaign_filter = True
 
+    def get_url_params(self, context, next_page_token):
+        params = super().get_url_params(context, next_page_token)
+        if "query" in params and self.supports_campaign_filter and self.campaign_ids:
+            campaign_ids_str = ", ".join(self.campaign_ids)
+            query = params["query"]
+            if "WHERE" in query.upper():
+                params["query"] = query.rstrip() + f" AND campaign.id IN ({campaign_ids_str})"
+            else:
+                params["query"] = query.rstrip() + f" WHERE campaign.id IN ({campaign_ids_str})"
+            self.logger.debug(
+                "Campaign filter applied for stream '%s' (customer_id=%s): campaign.id IN (%s)",
+                self.name, (context or {}).get("customer_id"), campaign_ids_str,
+            )
+        return params
 
     def get_records(self, context):
         records =  super().get_records(context)
@@ -175,6 +214,8 @@ class ReportsStream(GoogleAdsStream):
 
 class GeotargetsStream(ReportsStream):
     """Geotargets, worldwide, constant across all customers"""
+
+    supports_campaign_filter = False
 
     def gaql(self, context=None):
         return """
@@ -211,9 +252,13 @@ class GeotargetsStream(ReportsStream):
 
 class ClickViewReportStream(ReportsStream):
     date: datetime.date
-
+    supports_campaign_filter = False  # campaign filter applied directly in gaql()
 
     def gaql(self, context=None):
+        campaign_filter = (
+            f" AND campaign.id IN ({', '.join(self.campaign_ids)})"
+            if self.campaign_ids else ""
+        )
         return f"""
         SELECT
             click_view.gclid
@@ -232,7 +277,7 @@ class ClickViewReportStream(ReportsStream):
             , click_view.keyword
             , click_view.keyword_info.match_type
         FROM click_view
-        WHERE segments.date = '{self.date.isoformat()}'
+        WHERE segments.date = '{self.date.isoformat()}'{campaign_filter}
         """
 
     records_jsonpath = "$.results[*]"
@@ -294,13 +339,15 @@ class ClickViewReportStream(ReportsStream):
 
     def validate_response(self, response):
         if response.status_code == HTTPStatus.FORBIDDEN:
-            error = response.json()["error"]["details"][0]["errors"][0]
-            msg = (
-                "Click view report not accessible to customer "
-                f"'{self.context['customer_id']}': {error['message']}"
-            )
+            try:
+                error = response.json()["error"]["details"][0]["errors"][0]
+                msg = (
+                    "Click view report not accessible to customer "
+                    f"'{self.context['customer_id']}': {error['message']}"
+                )
+            except (KeyError, IndexError, ValueError):
+                msg = self.response_error_message(response)
             raise ResumableAPIError(msg, response)
-
         super().validate_response(response)
 
 
@@ -481,6 +528,8 @@ class CampaignConversionActionPerformance(ReportsStream):
 
 class ConversionActionsStream(ReportsStream):
     """Conversion action metadata."""
+
+    supports_campaign_filter = False
 
     def gaql(self, context=None):
         return """

@@ -1,6 +1,7 @@
 """REST client handling, including GoogleAdsStream base class."""
 
 from datetime import datetime
+from http import HTTPStatus
 from backports.cached_property import cached_property
 from typing import Any, Dict, Optional
 
@@ -34,16 +35,6 @@ class GoogleAdsStream(RESTStream):
     records_jsonpath = "$[*]"  # Or override `parse_response`.
     next_page_token_jsonpath = "$.nextPageToken"  # Or override `get_next_page_token`.
     _LOG_REQUEST_METRIC_URLS: bool = True
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        if self.config.get("locations"):
-            self._config["customer_ids"] = [
-                _sanitise_customer_id(loc.get("id"))
-                for loc in self.config.get("locations", [])
-                if "id" in loc and loc.get("id")
-            ]
-        # No more support for customer_id / customer_ids legacy options.
 
     def response_error_message(self, response: requests.Response) -> str:
         """Build error message for invalid http statuses.
@@ -146,11 +137,27 @@ class GoogleAdsStream(RESTStream):
             params["query"] = self.gaql(context)
         return params
 
+    def validate_response(self, response: requests.Response) -> None:
+        if not response.ok and response.status_code != HTTPStatus.UNAUTHORIZED:
+            msg = self.response_error_message(response)
+            self.logger.warning(
+                "HTTP %d for stream '%s' — suppressing and continuing. %s",
+                response.status_code, self.name, msg,
+            )
+            raise ResumableAPIError(msg, response)
+        super().validate_response(response)
+
     def get_records(self, context):
         try:
             yield from super().get_records(context)
         except ResumableAPIError as e:
-            self.logger.warning(e)
+            customer_id = (context or {}).get("customer_id")
+            self.logger.warning(
+                "Skipping records for stream '%s'%s: %s",
+                self.name,
+                f" (customer_id={customer_id})" if customer_id else "",
+                e,
+            )
 
     @property
     def gaql(self):
@@ -175,14 +182,31 @@ class GoogleAdsStream(RESTStream):
     @cached_property
     def customer_ids(self):
         # Only support locations[].id. If not present, return None (federated mode or all accessible accounts).
+        # IDs that are not exactly 10 digits are treated as campaign IDs and excluded here.
         if self.config.get("locations"):
             ids = [
                 _sanitise_customer_id(loc.get("id"))
                 for loc in self.config.get("locations", [])
-                if "id" in loc and loc.get("id")
+                if "id" in loc and loc.get("id") and not _is_campaign_id(loc.get("id"))
             ]
             return ids if ids else None
         return None
+
+    @cached_property
+    def campaign_ids(self):
+        """Return campaign IDs from locations config, or None if none are present.
+
+        Campaign IDs are locations entries whose sanitized ID is not exactly 10 digits.
+        Google Ads customer IDs are always exactly 10 digits; anything else is a campaign ID.
+        """
+        if not self.config.get("locations"):
+            return None
+        ids = [
+            _sanitise_customer_id(loc.get("id"))
+            for loc in self.config.get("locations", [])
+            if "id" in loc and loc.get("id") and _is_campaign_id(loc.get("id"))
+        ]
+        return ids if ids else None
 
     @cached_property
     def login_customer_id(self):
@@ -227,3 +251,12 @@ class GoogleAdsStream(RESTStream):
 
 def _sanitise_customer_id(customer_id: str):
     return customer_id.replace("-", "").strip()
+
+
+def _is_campaign_id(id_str: str) -> bool:
+    """Return True if the ID is likely a campaign ID rather than a customer ID.
+
+    Google Ads customer IDs are always exactly 10 digits when sanitized.
+    Any ID with a different length is treated as a campaign ID.
+    """
+    return len(_sanitise_customer_id(id_str)) != 10
